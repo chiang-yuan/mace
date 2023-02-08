@@ -18,6 +18,8 @@ from torch_ema import ExponentialMovingAverage
 
 import mace
 from mace import data, modules, tools
+from mace.data import HDF5DataLoader, HDF5Dataset
+from mace.data.utils import save_dataset_as_HDF5
 from mace.tools import torch_geometric
 from mace.tools.scripts_utils import (
     LRScheduler,
@@ -129,24 +131,54 @@ def main() -> None:
         )
         logging.info(f"Atomic energies: {atomic_energies.tolist()}")
 
-    train_loader = torch_geometric.dataloader.DataLoader(
-        dataset=[
-            data.AtomicData.from_config(config, z_table=z_table, cutoff=args.r_max)
-            for config in collections.train
-        ],
-        batch_size=args.batch_size,
-        shuffle=True,
-        drop_last=True,
-    )
-    valid_loader = torch_geometric.dataloader.DataLoader(
-        dataset=[
-            data.AtomicData.from_config(config, z_table=z_table, cutoff=args.r_max)
-            for config in collections.valid
-        ],
-        batch_size=args.valid_batch_size,
-        shuffle=False,
-        drop_last=False,
-    )
+    if not args.load_on_the_fly:
+        train_loader = torch_geometric.dataloader.DataLoader(
+            dataset=[
+                data.AtomicData.from_config(config, z_table=z_table, cutoff=args.r_max)
+                for config in collections.train
+            ],
+            batch_size=args.batch_size,
+            shuffle=True,
+            drop_last=True,
+        )
+        valid_loader = torch_geometric.dataloader.DataLoader(
+            dataset=[
+                data.AtomicData.from_config(config, z_table=z_table, cutoff=args.r_max)
+                for config in collections.valid
+            ],
+            batch_size=args.valid_batch_size,
+            shuffle=False,
+            drop_last=False,
+        )
+    else:
+        if args.train_h5 is None:
+            training_set = [data.AtomicData.from_config(
+                config, z_table=z_table, cutoff=args.r_max)
+                for config in collections.train]  
+            save_dataset_as_HDF5(training_set, args.h5_prefix + "train.h5")
+            training_set_processed = HDF5Dataset(args.h5_prefix + "train.h5")
+        else:
+            training_set_processed = HDF5Dataset(args.train_h5)
+        train_loader = HDF5DataLoader(
+            training_set_processed,
+            batch_size=args.batch_size,
+            shuffle=True,
+            drop_last=True,)
+        
+        if args.valid_h5 is None:
+            validation_set = [data.AtomicData.from_config(
+                config, z_table=z_table, cutoff=args.r_max)
+                for config in collections.valid]  
+            save_dataset_as_HDF5(validation_set, args.h5_prefix + "valid.h5")
+            validation_set_processed = HDF5Dataset(args.h5_prefix + "valid.h5")
+        else:
+            validation_set_processed = HDF5Dataset(args.valid_h5)
+        valid_loader = HDF5DataLoader(
+            validation_set_processed,
+            batch_size=args.valid_batch_size,
+            shuffle=False,
+            drop_last=False)
+            
 
     loss_fn: torch.nn.Module
     if args.loss == "weighted":
@@ -457,7 +489,7 @@ def main() -> None:
                 swa=True,
                 device=device,
             )
-        except Exception as e:  # pylint: disable=W0703
+        except Exception:  # pylint: disable=W0703
             opt_start_epoch = checkpoint_handler.load_latest(
                 state=tools.CheckpointState(model, optimizer, lr_scheduler),
                 swa=False,
