@@ -145,6 +145,13 @@ def main() -> None:
         else:
             atomic_energies_dict = get_atomic_energies(args.E0s, None, z_table)
 
+
+    if atomic_energies_dict is None or len(atomic_energies_dict) == 0:
+        if args.train_file.endswith(".xyz"):
+            atomic_energies_dict = get_atomic_energies(args.E0s, collections.train, z_table)
+        else:
+            atomic_energies_dict = get_atomic_energies(args.E0s, None, z_table)
+
     if args.model == "AtomicDipolesMACE":
         atomic_energies = None
         dipole_only = True
@@ -197,10 +204,21 @@ def main() -> None:
             drop_last=True,
             seed=args.seed,
         )
-        valid_sampler = torch.utils.data.distributed.DistributedSampler(
-            valid_set, 
-            num_replicas=world_size, 
-            rank=rank,
+        valid_loader = torch_geometric.dataloader.DataLoader(
+            dataset=[
+                data.AtomicData.from_config(config, z_table=z_table, cutoff=args.r_max)
+                for config in collections.valid
+            ],
+            batch_size=args.valid_batch_size,
+            shuffle=False,
+            drop_last=False,
+            num_workers=args.num_workers,
+        )
+    else:
+        training_set_processed = HDF5Dataset(args.train_file)
+        train_loader = torch_geometric.dataloader.DataLoader(
+            training_set_processed,
+            batch_size=args.batch_size,
             shuffle=True,
             drop_last=True,
             seed=args.seed,
@@ -273,6 +291,7 @@ def main() -> None:
     ), "All channels must have the same dimension, use the num_channels and max_L keywords to specify the number of channels and the maximum L"
 
     logging.info(f"Hidden irreps: {args.hidden_irreps}")
+
 
     model_config = dict(
         r_max=args.r_max,
@@ -640,18 +659,12 @@ def main() -> None:
                 model = model.to("cpu")
             torch.save(model, model_path)
 
-            if swa_eval:
-                torch.save(model, Path(args.model_dir) / (args.name + "_swa.model"))
-            else:
-                torch.save(model, Path(args.model_dir) / (args.name + ".model"))
-                
-        if args.distributed:
-            torch.distributed.barrier()
+        if swa_eval:
+            torch.save(model, Path(args.model_dir) / (args.name + "_swa.model"))
+        else:
+            torch.save(model, Path(args.model_dir) / (args.name + ".model"))
 
-    logging.info("Done")    
-    if args.distributed:
-        torch.distributed.destroy_process_group()
-
+    logging.info("Done")
 
 if __name__ == "__main__":
     main()
