@@ -19,12 +19,15 @@ from torch_ema import ExponentialMovingAverage
 import mace
 from mace import data, modules, tools
 from mace.data import HDF5Dataset
-from mace.data.utils import save_dataset_as_HDF5
 from mace.tools import torch_geometric
 from mace.tools.scripts_utils import (
     LRScheduler,
     create_error_table,
+    get_atomic_energies,
+    get_config_type_weights,
     get_dataset_from_xyz,
+    get_files_with_suffix,
+    get_loss_fn,
 )
 
 
@@ -43,17 +46,11 @@ def main() -> None:
     device = tools.init_device(args.device)
     tools.set_default_dtype(args.default_dtype)
 
-    try:
-        config_type_weights = ast.literal_eval(args.config_type_weights)
-        assert isinstance(config_type_weights, dict)
-    except Exception as e:  # pylint: disable=W0703
-        logging.warning(
-            f"Config type weights not specified correctly ({e}), using Default"
-        )
-        config_type_weights = {"Default": 1.0}
+    config_type_weights = get_config_type_weights(args.config_type_weights)
 
     # Data preparation
-    if args.train_file is not None:
+    if args.train_file.endswith(".xyz"):
+        assert args.valid_file.endswith(".xyz") or args.valid_file is None, "valid_file if given must be same format as train_file"
         collections, atomic_energies_dict = get_dataset_from_xyz(
             train_path=args.train_file,
             valid_path=args.valid_file,
@@ -73,13 +70,17 @@ def main() -> None:
             f"Total number of configurations: train={len(collections.train)}, valid={len(collections.valid)}, "
             f"tests=[{', '.join([name + ': ' + str(len(test_configs)) for name, test_configs in collections.tests])}]"
         )
-    else:
-        assert args.train_h5 is not None, "Must specify either train_file or train_h5"
+    elif args.train_file.endswith(".h5"):
         atomic_energies_dict = None
+    else:
+        raise RuntimeError(
+            f"train_file must be either .xyz or .h5, got {args.train_file}"
+        )
 
     # Atomic number table
     # yapf: disable
     if args.atomic_numbers is None:
+        assert args.train_file.endswith(".xyz"), "Must specify atomic_numbers when using .h5 train_file input"
         z_table = tools.get_atomic_number_table_from_zs(
             z
             for configs in (collections.train, collections.valid)
@@ -91,9 +92,15 @@ def main() -> None:
         zs_list = ast.literal_eval(args.atomic_numbers)
         assert isinstance(zs_list, list)
         z_table = tools.get_atomic_number_table_from_zs(zs_list)
-
     # yapf: enable
     logging.info(z_table)
+
+    if atomic_energies_dict is None or len(atomic_energies_dict) == 0:
+        if args.train_file.endswith(".xyz"):
+            atomic_energies_dict = get_atomic_energies(args.E0s, collections.train, z_table)
+        else:
+            atomic_energies_dict = get_atomic_energies(args.E0s, None, z_table)
+
     if args.model == "AtomicDipolesMACE":
         atomic_energies = None
         dipole_only = True
@@ -113,42 +120,13 @@ def main() -> None:
         else:
             compute_energy = True
             compute_dipole = False
-        if atomic_energies_dict is None or len(atomic_energies_dict) == 0:
-            if args.E0s is not None:
-                logging.info(
-                    "Atomic Energies not in training file, using command line argument E0s"
-                )
-                if args.E0s.lower() == "average":
-                    logging.info(
-                        "Computing average Atomic Energies using least squares regression"
-                    )
-                    # catch if colections.train not defined above
-                    try:
-                        atomic_energies_dict = data.compute_average_E0s(
-                            collections.train, z_table
-                        )
-                    except Exception as e:
-                        raise RuntimeError(
-                            f"Could not compute average E0s if no training xyz given, error {e} occured"
-                        ) from e
-                else:
-                    try:
-                        atomic_energies_dict = ast.literal_eval(args.E0s)
-                        assert isinstance(atomic_energies_dict, dict)
-                    except Exception as e:
-                        raise RuntimeError(
-                            f"E0s specified invalidly, error {e} occured"
-                        ) from e
-            else:
-                raise RuntimeError(
-                    "E0s not found in training file and not specified in command line"
-                )
+
         atomic_energies: np.ndarray = np.array(
             [atomic_energies_dict[z] for z in z_table.zs]
         )
         logging.info(f"Atomic energies: {atomic_energies.tolist()}")
 
-    if not args.load_on_the_fly:
+    if args.train_file.endswith(".xyz"):
         train_loader = torch_geometric.dataloader.DataLoader(
             dataset=[
                 data.AtomicData.from_config(config, z_table=z_table, cutoff=args.r_max)
@@ -157,6 +135,7 @@ def main() -> None:
             batch_size=args.batch_size,
             shuffle=True,
             drop_last=True,
+            num_workers=args.num_workers,
         )
         valid_loader = torch_geometric.dataloader.DataLoader(
             dataset=[
@@ -166,17 +145,10 @@ def main() -> None:
             batch_size=args.valid_batch_size,
             shuffle=False,
             drop_last=False,
+            num_workers=args.num_workers,
         )
     else:
-        if args.train_h5 is None:
-            training_set = [data.AtomicData.from_config(
-                config, z_table=z_table, cutoff=args.r_max).to("cpu")
-                for config in collections.train] 
-            save_dataset_as_HDF5(training_set, args.h5_prefix + "train.h5") # TODO: save and delete
-            del training_set
-            training_set_processed = HDF5Dataset(args.h5_prefix + "train.h5")
-        else:
-            training_set_processed = HDF5Dataset(args.train_h5)
+        training_set_processed = HDF5Dataset(args.train_file)
         train_loader = torch_geometric.dataloader.DataLoader(
             training_set_processed,
             batch_size=args.batch_size,
@@ -184,16 +156,8 @@ def main() -> None:
             drop_last=True,
             num_workers=args.num_workers,
             pin_memory=args.pin_memory)
-        
-        if args.valid_h5 is None:
-            validation_set = [data.AtomicData.from_config(
-                config, z_table=z_table, cutoff=args.r_max)
-                for config in collections.valid]  
-            save_dataset_as_HDF5(validation_set, args.h5_prefix + "valid.h5")
-            del validation_set
-            validation_set_processed = HDF5Dataset(args.h5_prefix + "valid.h5")
-        else:
-            validation_set_processed = HDF5Dataset(args.valid_h5)
+
+        validation_set_processed = HDF5Dataset(args.valid_file)
         valid_loader = torch_geometric.dataloader.DataLoader(
             validation_set_processed,
             batch_size=args.valid_batch_size,
@@ -201,51 +165,17 @@ def main() -> None:
             drop_last=False,
             num_workers=args.num_workers,
             pin_memory=args.pin_memory)
-            
 
-    loss_fn: torch.nn.Module
-    if args.loss == "weighted":
-        loss_fn = modules.WeightedEnergyForcesLoss(
-            energy_weight=args.energy_weight, forces_weight=args.forces_weight
-        )
-    elif args.loss == "forces_only":
-        loss_fn = modules.WeightedForcesLoss(forces_weight=args.forces_weight)
-    elif args.loss == "virials":
-        loss_fn = modules.WeightedEnergyForcesVirialsLoss(
-            energy_weight=args.energy_weight,
-            forces_weight=args.forces_weight,
-            virials_weight=args.virials_weight,
-        )
-    elif args.loss == "stress":
-        loss_fn = modules.WeightedEnergyForcesStressLoss(
-            energy_weight=args.energy_weight,
-            forces_weight=args.forces_weight,
-            stress_weight=args.stress_weight,
-        )
-    elif args.loss == "huber":
-        loss_fn = modules.WeightedHuberEnergyForcesStressLoss(
-            energy_weight=args.energy_weight,
-            forces_weight=args.forces_weight,
-            stress_weight=args.stress_weight,
-            huber_delta=args.huber_delta,
-        )
-    elif args.loss == "dipole":
-        assert (
-            dipole_only is True
-        ), "dipole loss can only be used with AtomicDipolesMACE model"
-        loss_fn = modules.DipoleSingleLoss(
-            dipole_weight=args.dipole_weight,
-        )
-    elif args.loss == "energy_forces_dipole":
-        assert dipole_only is False and compute_dipole is True
-        loss_fn = modules.WeightedEnergyForcesDipoleLoss(
-            energy_weight=args.energy_weight,
-            forces_weight=args.forces_weight,
-            dipole_weight=args.dipole_weight,
-        )
-    else:
-        # Unweighted Energy and Forces loss by default
-        loss_fn = modules.WeightedEnergyForcesLoss(energy_weight=1.0, forces_weight=1.0)
+    loss_fn: torch.nn.Module = get_loss_fn(
+        args.loss,
+        args.energy_weight,
+        args.forces_weight,
+        args.stress_weight,
+        args.virials_weight,
+        args.dipole_weight,
+        dipole_only,
+        compute_dipole,
+    )
     logging.info(loss_fn)
 
     if args.compute_avg_num_neighbors:
@@ -284,6 +214,7 @@ def main() -> None:
     ), "All channels must have the same dimension, use the num_channels and max_L keywords to specify the number of channels and the maximum L"
 
     logging.info(f"Hidden irreps: {args.hidden_irreps}")
+
     model_config = dict(
         r_max=args.r_max,
         num_bessel=args.num_radial_basis,
@@ -567,14 +498,39 @@ def main() -> None:
         log_wandb=args.wandb,
     )
 
-    if args.train_file is not None:
-        # Evaluation on test datasets
-        logging.info("Computing metrics for training, validation, and test sets")
-
-        all_collections = [
-            ("train", collections.train),
-            ("valid", collections.valid),
-        ] + collections.tests
+    logging.info("Computing metrics for training, validation, and test sets")
+    all_data_loaders = {
+            "train": train_loader,
+            "valid": valid_loader,
+    }
+    if args.train_file.endswith(".xyz"):
+        for name, subset in collections.tests:
+            test_set = [data.AtomicData.from_config(
+                config, z_table=z_table, cutoff=args.r_max)
+                for config in subset]
+            test_loader = torch.utils.data.DataLoader(
+                test_set,
+                batch_size=args.valid_batch_size,
+                shuffle=False,
+                num_workers=args.num_workers,
+                drop_last=False,
+            )
+            all_data_loaders[name] = test_loader
+    else:
+        # get all test paths
+        test_files = get_files_with_suffix(
+            args.test_dir, "", "_test.h5"
+        )
+        for test_file in test_files:
+            test_set = HDF5Dataset(test_file)
+            test_loader = torch_geometric.dataloader.DataLoader(
+                test_set,
+                batch_size=args.valid_batch_size,
+                shuffle=False,
+                drop_last=False,
+                num_workers=args.num_workers,
+                pin_memory=args.pin_memory)
+            all_data_loaders[test_file.stem] = test_loader
 
     for swa_eval in swas:
         epoch = checkpoint_handler.load_latest(
@@ -585,23 +541,16 @@ def main() -> None:
         model.to(device)
         logging.info(f"Loaded model from epoch {epoch}")
 
-        for param in model.parameters():
-            param.requires_grad = False
-
-        if args.train_file is not None:
-            table = create_error_table(
-                table_type=args.error_table,
-                all_collections=all_collections,
-                z_table=z_table,
-                r_max=args.r_max,
-                valid_batch_size=args.valid_batch_size,
-                model=model,
-                loss_fn=loss_fn,
-                output_args=output_args,
-                log_wandb=args.wandb,
-                device=device,
-            )
-            logging.info("\n" + str(table))
+        table = create_error_table(
+            table_type=args.error_table,
+            all_data_loaders=all_data_loaders,
+            model=model,
+            loss_fn=loss_fn,
+            output_args=output_args,
+            log_wandb=args.wandb,
+            device=device,
+        )
+        logging.info("\n" + str(table))
 
         # Save entire model
         if swa_eval:
@@ -619,7 +568,6 @@ def main() -> None:
             torch.save(model, Path(args.model_dir) / (args.name + ".model"))
 
     logging.info("Done")
-
 
 if __name__ == "__main__":
     main()
