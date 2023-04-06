@@ -64,7 +64,9 @@ def main() -> None:
     # Data preparation
     if args.train_file.endswith(".xyz"):
         if args.valid_file is not None:
-            assert args.valid_file.endswith(".xyz"), "valid_file if given must be same format as train_file"
+            assert args.valid_file.endswith(
+                ".xyz"
+            ), "valid_file if given must be same format as train_file"
         collections, atomic_energies_dict = get_dataset_from_xyz(
             train_path=args.train_file,
             valid_path=args.valid_file,
@@ -90,7 +92,7 @@ def main() -> None:
         raise RuntimeError(
             f"train_file must be either .xyz or .h5, got {args.train_file}"
         )
-    
+
     # Atomic number table
     # yapf: disable
     if args.atomic_numbers is None:
@@ -111,7 +113,9 @@ def main() -> None:
 
     if atomic_energies_dict is None or len(atomic_energies_dict) == 0:
         if args.train_file.endswith(".xyz"):
-            atomic_energies_dict = get_atomic_energies(args.E0s, collections.train, z_table)
+            atomic_energies_dict = get_atomic_energies(
+                args.E0s, collections.train, z_table
+            )
         else:
             atomic_energies_dict = get_atomic_energies(args.E0s, None, z_table)
 
@@ -163,23 +167,29 @@ def main() -> None:
             num_workers=args.num_workers,
         )
     else:
-        training_set_processed = HDF5Dataset(args.train_file)
+        training_set_processed = HDF5Dataset(
+            args.train_file, r_max=args.r_max, z_table=z_table
+        )
         train_loader = torch_geometric.dataloader.DataLoader(
             training_set_processed,
             batch_size=args.batch_size,
             shuffle=True,
             drop_last=True,
             num_workers=args.num_workers,
-            pin_memory=args.pin_memory)
+            pin_memory=args.pin_memory,
+        )
 
-        validation_set_processed = HDF5Dataset(args.valid_file)
+        validation_set_processed = HDF5Dataset(
+            args.valid_file, r_max=args.r_max, z_table=z_table
+        )
         valid_loader = torch_geometric.dataloader.DataLoader(
             validation_set_processed,
             batch_size=args.valid_batch_size,
             shuffle=False,
             drop_last=False,
             num_workers=args.num_workers,
-            pin_memory=args.pin_memory)
+            pin_memory=args.pin_memory,
+        )
 
     loss_fn: torch.nn.Module = get_loss_fn(
         args.loss,
@@ -250,7 +260,9 @@ def main() -> None:
         args.std = 1.0
         logging.info("No scaling selected")
     elif args.mean is None or args.std is None:
-        args.mean, args.std = modules.scaling_classes[args.scaling](train_loader, atomic_energies)
+        args.mean, args.std = modules.scaling_classes[args.scaling](
+            train_loader, atomic_energies
+        )
 
     if args.model == "MACE":
         model = modules.ScaleShiftMACE(
@@ -332,7 +344,6 @@ def main() -> None:
         )
     else:
         raise RuntimeError(f"Unknown model: '{args.model}'")
-
 
     if torch.cuda.device_count() > 1:
         logging.info(f"Multi-GPUs training on {torch.cuda.device_count()} GPUs.")
@@ -515,14 +526,15 @@ def main() -> None:
 
     logging.info("Computing metrics for training, validation, and test sets")
     all_data_loaders = {
-            "train": train_loader,
-            "valid": valid_loader,
+        "train": train_loader,
+        "valid": valid_loader,
     }
     if args.train_file.endswith(".xyz"):
         for name, subset in collections.tests:
-            test_set = [data.AtomicData.from_config(
-                config, z_table=z_table, cutoff=args.r_max)
-                for config in subset]
+            test_set = [
+                data.AtomicData.from_config(config, z_table=z_table, cutoff=args.r_max)
+                for config in subset
+            ]
             test_loader = torch_geometric.dataloader.DataLoader(
                 test_set,
                 batch_size=args.valid_batch_size,
@@ -533,18 +545,17 @@ def main() -> None:
             all_data_loaders[name] = test_loader
     else:
         # get all test paths
-        test_files = get_files_with_suffix(
-            args.test_dir, "_test.h5"
-        )
+        test_files = get_files_with_suffix(args.test_dir, "_test.h5")
         for test_file in test_files:
-            test_set = HDF5Dataset(test_file)
+            test_set = HDF5Dataset(test_file, z_table=z_table, cutoff=args.r_max)
             test_loader = torch_geometric.dataloader.DataLoader(
                 test_set,
                 batch_size=args.valid_batch_size,
                 shuffle=False,
                 drop_last=False,
                 num_workers=args.num_workers,
-                pin_memory=args.pin_memory)
+                pin_memory=args.pin_memory,
+            )
             test_file_name = os.path.splitext(os.path.basename(test_file))[0]
             all_data_loaders[test_file_name] = test_loader
 
@@ -584,6 +595,7 @@ def main() -> None:
             torch.save(model, Path(args.model_dir) / (args.name + ".model"))
 
     logging.info("Done")
+
 
 if __name__ == "__main__":
     main()
