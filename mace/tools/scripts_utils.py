@@ -11,6 +11,7 @@ import os
 from typing import Dict, List, Optional, Tuple
 
 import torch
+import torch.distributed
 from prettytable import PrettyTable
 
 from mace import data, modules
@@ -244,6 +245,7 @@ def create_error_table(
     output_args: Dict[str, bool],
     log_wandb: bool,
     device: str,
+    distributed: bool = False,
 ) -> PrettyTable:
     if log_wandb:
         import wandb
@@ -316,6 +318,9 @@ def create_error_table(
             output_args=output_args,
             device=device,
         )
+        if distributed:
+            torch.distributed.barrier()
+            
         del data_loader
         torch.cuda.empty_cache()
         if log_wandb:
