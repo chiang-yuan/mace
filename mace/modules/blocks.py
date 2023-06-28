@@ -11,6 +11,7 @@ import numpy as np
 import torch.nn.functional
 from e3nn import nn, o3
 from e3nn.util.jit import compile_mode
+from ase.units import _e, _eps0, pi, m
 
 from mace.tools.scatter import scatter_sum
 
@@ -21,6 +22,84 @@ from .irreps_tools import (
 )
 from .radial import BesselBasis, PolynomialCutoff
 from .symmetric_contraction import SymmetricContraction
+
+from .utils import exponential_envelope
+
+e_Ang2C_m = _e / m # [e/Ang] -> [C/m]
+
+class ZBLBlock(nn.Module):
+    """Ziegler-Biersack-Littmark (ZBL) screened nuclear repulsion"""
+    a = torch.tensor([0.18175, 0.50986, 0.28022, 0.02817])
+    b = torch.tensor([-3.19980, -0.94229, -0.40290, -0.20162])
+    def __init__(
+            self,
+            rinner,
+            router,
+            **kwargs) -> None:
+        super().__init__(**kwargs)
+
+        self.rinner = rinner
+        self.router = router
+
+    def repulsion_energy(self, zi, zj, rij): # [eV]
+        return e_Ang2C_m / (4 * pi * _eps0) * zi*zj/rij
+
+    def switching_function(self, zi, zj, rij): # [eV]
+
+        repulsion_router = self.repulsion_energy(zi, zj, self.router)
+
+        grad1 = torch.autograd.grad(
+            outputs=[repulsion_router],
+            inputs=[self.router],
+            grad_outputs=[torch.ones_like(repulsion_router)],
+            create_graph=True
+        )[0]
+
+        grad2 = torch.autograd.grad(
+            outputs=[grad1],
+            inputs=[self.router],
+            grad_outputs=[torch.ones_like(grad1)],
+            create_graph=True
+        )[0]
+
+        A = (-3 * grad1 + (self.router - self.rinner) * grad2) / (self.router - self.rinner)**2
+        B = (2 * grad1 - (self.router - self.rinner) * grad2) / (self.router - self.rinner)**3
+        C = - repulsion_router + 1./2. * (self.router - self.rinner) * grad1 \
+            - 1./12. * (self.router - self.rinner)**2 * grad2
+
+        switching = torch.where(rij < self.rinner, C, A/3. * (rij - self.rinner)**3 + B/4. * (rij - self.rinner)**4 + C)
+
+        return switching
+
+    def forward(
+            self,
+            cell: torch.Tensor,
+            zs: torch.Tensor,
+            positions: torch.Tensor,
+            edge_index: torch.Tensor,
+            edge_shift: torch.Tensor
+            ) -> torch.Tensor:
+
+        edge_src = edge_index[0]
+        edge_dst = edge_index[1]
+
+        vij = positions[edge_dst] - positions[edge_src] + torch.matmul(edge_shift, cell)
+        rij = torch.sqrt(torch.sum(torch.pow(vij, 2), dim=1))
+
+        aij = 0.46850 / (torch.pow(zs[edge_src], 0.23) + torch.pow(zs[edge_dst], 0.23))
+
+        envelope = exponential_envelope(
+            a=self.a,
+            b=self.b,
+            x=rij / aij
+            )
+
+        energy_pair = self.repulsion_energy(zs[edge_src], zs[edge_dst], rij) * envelope \
+            + self.switching_function(zs[edge_src], zs[edge_dst], rij)
+        
+        self.energy = 0.5* torch.sum(torch.where(rij > self.router, 0, energy_pair))
+
+        return self.energy
 
 
 @compile_mode("script")

@@ -19,6 +19,11 @@ from mace.tools.scatter import scatter_sum
 from .blocks import AtomicEnergiesBlock
 
 
+@torch.jit.script_if_tracing
+def exponential_envelope(a, b, x):
+    return torch.einsum('i,ij->j', a, torch.exp(torch.outer(b, x)))
+
+
 def compute_forces(
     energy: torch.Tensor, positions: torch.Tensor, training: bool = True
 ) -> torch.Tensor:
@@ -108,6 +113,28 @@ def get_symmetric_displacement(
         cell[batch[sender]],
     )
     return positions, shifts, displacement
+
+def compute_zbl_energy(
+    zs: torch.Tensor,  # [n_nodes, ]
+    positions: torch.Tensor,  # [n_nodes, 3]
+    edge_index: torch.Tensor,  # [2, n_edges]
+    shifts: torch.Tensor,  # [n_edges, 3]
+):
+    
+    sender = edge_index[0]
+    receiver = edge_index[1]
+
+    vectors = positions[receiver] - positions[sender] + shifts  # [n_edges, 3]
+    lengths = torch.linalg.norm(vectors, dim=-1, keepdim=True)  # [n_edges, 1]
+
+    zij = torch.mul(zs[receiver], zs[sender])
+
+    from ase.units import invcm, pi, _e
+    
+    
+    eij = 1/(4*pi*invcm) * zij * (_e ** 2) / lengths # TODO: envelop function phi, switch function s
+    
+    return torch.sum(eij)
 
 
 def get_outputs(
