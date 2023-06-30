@@ -19,11 +19,6 @@ from mace.tools.scatter import scatter_sum
 from .blocks import AtomicEnergiesBlock
 
 
-@torch.jit.script_if_tracing
-def exponential_envelope(a, b, x):
-    return torch.einsum('i,ij->j', a, torch.exp(torch.outer(b, x)))
-
-
 def compute_forces(
     energy: torch.Tensor, positions: torch.Tensor, training: bool = True
 ) -> torch.Tensor:

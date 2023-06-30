@@ -23,9 +23,11 @@ from .irreps_tools import (
 from .radial import BesselBasis, PolynomialCutoff
 from .symmetric_contraction import SymmetricContraction
 
-from .utils import exponential_envelope
-
 e_Ang2C_m = _e / m # [e/Ang] -> [C/m]
+
+@torch.jit.script_if_tracing
+def exponential_envelope(a, b, x):
+    return torch.einsum('i,ij->j', a, torch.exp(torch.outer(b, x)))
 
 class ZBLBlock(nn.Module):
     """Ziegler-Biersack-Littmark (ZBL) screened nuclear repulsion"""
