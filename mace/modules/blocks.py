@@ -29,7 +29,7 @@ e_Ang2C_m = _e / m # [e/Ang] -> [C/m]
 def exponential_envelope(a, b, x):
     return torch.einsum('i,ij->j', a, torch.exp(torch.outer(b, x)))
 
-class ZBLBlock(nn.Module):
+class ZBLBlock(torch.nn.Module):
     """Ziegler-Biersack-Littmark (ZBL) screened nuclear repulsion"""
     a = torch.tensor([0.18175, 0.50986, 0.28022, 0.02817])
     b = torch.tensor([-3.19980, -0.94229, -0.40290, -0.20162])
