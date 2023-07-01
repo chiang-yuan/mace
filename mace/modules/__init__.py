@@ -32,6 +32,7 @@ from .models import (
     MACE,
     AtomicDipolesMACE,
     BOTNet,
+    ZBLACE,
     EnergyDipolesMACE,
     ScaleShiftBOTNet,
     ScaleShiftMACE,

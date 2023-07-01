@@ -473,7 +473,8 @@ class ZBLACE(MACE):
             zs=data['zs'],
             positions=data["positions"],
             edge_index=data["edge_index"],
-            edge_shift=data["shifts"]
+            edge_shift=data["shifts"],
+            batch=data["batch"],
         )
         
         # Add E_0 and (scaled) interaction energy

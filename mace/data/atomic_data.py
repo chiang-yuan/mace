@@ -212,7 +212,7 @@ class AtomicData(torch_geometric.data.Data):
             virials=virials,
             dipole=dipole,
             charges=charges,
-            zs=indices
+            zs=indices.squeeze()
         )
 
 

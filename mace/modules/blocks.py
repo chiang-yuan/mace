@@ -35,18 +35,25 @@ class ZBLBlock(torch.nn.Module):
     b = torch.tensor([-3.19980, -0.94229, -0.40290, -0.20162])
     def __init__(
             self,
-            rinner,
-            router,
+            rinner: Union[float, torch.Tensor],
+            router: Union[float, torch.Tensor],
             **kwargs) -> None:
         super().__init__(**kwargs)
 
-        self.rinner = rinner
-        self.router = router
+        self.rinner = rinner if rinner is torch.Tensor else torch.tensor(rinner)
+        self.router = router if router is torch.Tensor else torch.tensor(router)
 
     def repulsion_energy(self, zi, zj, rij): # [eV]
         return e_Ang2C_m / (4 * pi * _eps0) * zi*zj/rij
 
-    def switching_function(self, zi, zj, rij): # [eV]
+    def switching_function(
+            self, 
+            zi: torch.Tensor,
+            zj: torch.Tensor, 
+            rij: torch.Tensor
+            ) -> torch.Tensor: # [eV]
+        
+        self.router.requires_grad_(True)
 
         repulsion_router = self.repulsion_energy(zi, zj, self.router)
 
@@ -79,25 +86,31 @@ class ZBLBlock(torch.nn.Module):
             zs: torch.Tensor,
             positions: torch.Tensor,
             edge_index: torch.Tensor,
-            edge_shift: torch.Tensor
+            edge_shift: torch.Tensor,
+            batch: torch.Tensor
             ) -> torch.Tensor:
 
         edge_src = edge_index[0]
         edge_dst = edge_index[1]
 
-        vij = positions[edge_dst] - positions[edge_src] + torch.matmul(edge_shift, cell)
-        rij = torch.sqrt(torch.sum(torch.pow(vij, 2), dim=1))
+        cell = cell.view(-1, 3, 3)
+        # vij = positions[edge_dst] - positions[edge_src] + torch.matmul(edge_shift, cell)
+        vij = positions[edge_dst] - positions[edge_src] + torch.einsum('bi,bij->bj', edge_shift, cell[batch[edge_src]])
+        rij = torch.sqrt(torch.sum(torch.pow(vij, 2), dim=-1)).requires_grad_()
 
         aij = 0.46850 / (torch.pow(zs[edge_src], 0.23) + torch.pow(zs[edge_dst], 0.23))
 
         envelope = exponential_envelope(
-            a=self.a,
-            b=self.b,
+            a=self.a.to(rij.dtype).to(device=rij.device),
+            b=self.b.to(rij.dtype).to(device=rij.device),
             x=rij / aij
             )
 
-        energy_pair = self.repulsion_energy(zs[edge_src], zs[edge_dst], rij) * envelope \
-            + self.switching_function(zs[edge_src], zs[edge_dst], rij)
+        zs_src = zs[edge_src].float().requires_grad_()
+        zs_dst = zs[edge_dst].float().requires_grad_()
+
+        energy_pair = self.repulsion_energy(zs_src, zs_dst, rij) * envelope \
+            + self.switching_function(zs_src, zs_dst, rij)
         
         self.energy = 0.5* torch.sum(torch.where(rij > self.router, 0, energy_pair))
 
