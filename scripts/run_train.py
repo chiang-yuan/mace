@@ -288,8 +288,8 @@ def main() -> None:
             atomic_inter_scale=std,
             atomic_inter_shift=mean,
             radial_MLP=ast.literal_eval(args.radial_MLP),
-            rinner=3.0,
-            router=4.0
+            rinner=1.9,
+            router=2.0
         )
     elif args.model == "ScaleShiftBOTNet":
         mean, std = modules.scaling_classes[args.scaling](train_loader, atomic_energies)

@@ -29,6 +29,7 @@ e_Ang2C_m = _e / m # [e/Ang] -> [C/m]
 def exponential_envelope(a, b, x):
     return torch.einsum('i,ij->j', a, torch.exp(torch.outer(b, x)))
 
+@compile_mode("script")
 class ZBLBlock(torch.nn.Module):
     """Ziegler-Biersack-Littmark (ZBL) screened nuclear repulsion"""
     a = torch.tensor([0.18175, 0.50986, 0.28022, 0.02817])
@@ -43,8 +44,11 @@ class ZBLBlock(torch.nn.Module):
         self.rinner = rinner if rinner is torch.Tensor else torch.tensor(rinner)
         self.router = router if router is torch.Tensor else torch.tensor(router)
 
-    def repulsion_energy(self, zi, zj, rij): # [eV]
-        return e_Ang2C_m / (4 * pi * _eps0) * zi*zj/rij
+    def repulsion_energy(
+            self, 
+            zi: torch.Tensor, zj: torch.Tensor, 
+            rij: torch.Tensor) -> torch.Tensor: # [eV]
+        return e_Ang2C_m / (4 * pi * _eps0) * torch.div(torch.mal(zi, zj), rij)
 
     def switching_function(
             self, 
@@ -53,20 +57,20 @@ class ZBLBlock(torch.nn.Module):
             rij: torch.Tensor
             ) -> torch.Tensor: # [eV]
         
-        self.router.requires_grad_(True)
+        routers = self.router.expand_as(rij).clone().requires_grad_(True) # type: ignore
 
-        repulsion_router = self.repulsion_energy(zi, zj, self.router)
+        repulsion_router = self.repulsion_energy(zi, zj, routers)
 
         grad1 = torch.autograd.grad(
             outputs=[repulsion_router],
-            inputs=[self.router],
+            inputs=[routers],
             grad_outputs=[torch.ones_like(repulsion_router)],
             create_graph=True
         )[0]
 
         grad2 = torch.autograd.grad(
             outputs=[grad1],
-            inputs=[self.router],
+            inputs=[routers],
             grad_outputs=[torch.ones_like(grad1)],
             create_graph=True
         )[0]
@@ -98,16 +102,16 @@ class ZBLBlock(torch.nn.Module):
         vij = positions[edge_dst] - positions[edge_src] + torch.einsum('bi,bij->bj', edge_shift, cell[batch[edge_src]])
         rij = torch.sqrt(torch.sum(torch.pow(vij, 2), dim=-1)).requires_grad_()
 
-        aij = 0.46850 / (torch.pow(zs[edge_src], 0.23) + torch.pow(zs[edge_dst], 0.23))
+        zs_src = zs[edge_src].to(dtype=rij.dtype).requires_grad_()
+        zs_dst = zs[edge_dst].to(dtype=rij.dtype).requires_grad_()
+
+        aij = 0.46850 / (torch.pow(zs_src, 0.23) + torch.pow(zs_dst, 0.23))
 
         envelope = exponential_envelope(
-            a=self.a.to(rij.dtype).to(device=rij.device),
-            b=self.b.to(rij.dtype).to(device=rij.device),
+            a=self.a.to(device=rij.device, dtype=rij.dtype),
+            b=self.b.to(device=rij.device, dtype=rij.dtype),
             x=rij / aij
             )
-
-        zs_src = zs[edge_src].float().requires_grad_()
-        zs_dst = zs[edge_dst].float().requires_grad_()
 
         energy_pair = self.repulsion_energy(zs_src, zs_dst, rij) * envelope \
             + self.switching_function(zs_src, zs_dst, rij)
@@ -115,7 +119,6 @@ class ZBLBlock(torch.nn.Module):
         self.energy = 0.5* torch.sum(torch.where(rij > self.router, 0, energy_pair))
 
         return self.energy
-
 
 @compile_mode("script")
 class LinearNodeEmbeddingBlock(torch.nn.Module):

@@ -18,6 +18,7 @@ from .blocks import (
     RealAgnosticResidualInteractionBlock,
     ResidualElementDependentInteractionBlock,
     ScaleShiftBlock,
+    ZBLBlock,
 )
 from .loss import (
     DipoleSingleLoss,
@@ -75,6 +76,7 @@ __all__ = [
     "LinearReadoutBlock",
     "EquivariantProductBasisBlock",
     "ScaleShiftBlock",
+    "ZBLBlock",
     "LinearDipoleReadoutBlock",
     "NonLinearDipoleReadoutBlock",
     "InteractionBlock",
@@ -83,6 +85,7 @@ __all__ = [
     "BesselBasis",
     "MACE",
     "ScaleShiftMACE",
+    "ZBLACE",
     "BOTNet",
     "ScaleShiftBOTNet",
     "AtomicDipolesMACE",
