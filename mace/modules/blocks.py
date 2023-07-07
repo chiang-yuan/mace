@@ -57,21 +57,20 @@ class ZBLBlock(torch.nn.Module):
             rij: torch.Tensor
             ) -> torch.Tensor: # [eV]
         
-        routers = self.router.expand_as(rij).clone().requires_grad_(True) # type: ignore
+        routers = self.router.expand_as(rij).clone().detach().requires_grad_(True) # type: ignore
 
         repulsion_router = self.repulsion_energy(zi, zj, routers)
 
         grad1 = torch.autograd.grad(
-            outputs=[repulsion_router],
-            inputs=[routers],
-            grad_outputs=[torch.ones_like(repulsion_router)],
+            outputs=repulsion_router,
+            inputs=routers,
+            retain_graph=True,
             create_graph=True
         )[0]
 
         grad2 = torch.autograd.grad(
-            outputs=[grad1],
-            inputs=[routers],
-            grad_outputs=[torch.ones_like(grad1)],
+            outputs=grad1,
+            inputs=routers,
             create_graph=True
         )[0]
 
