@@ -48,7 +48,7 @@ class ZBLBlock(torch.nn.Module):
             self, 
             zi: torch.Tensor, zj: torch.Tensor, 
             rij: torch.Tensor) -> torch.Tensor: # [eV]
-        return e_Ang2C_m / (4 * pi * _eps0) * torch.div(torch.mal(zi, zj), rij)
+        return e_Ang2C_m / (4 * pi * _eps0) * torch.div(torch.mul(zi, zj), rij)
 
     def switching_function(
             self, 
