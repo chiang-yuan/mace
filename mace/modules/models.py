@@ -482,7 +482,7 @@ class ZBLACE(MACE):
         node_energy = node_e0 + node_inter_es
 
         forces, virials, stress = get_outputs(
-            energy=inter_e,
+            energy=inter_e + zbl_energy,
             positions=data["positions"],
             displacement=displacement,
             cell=data["cell"],

@@ -63,7 +63,7 @@ class ZBLBlock(torch.nn.Module):
             self, 
             zi: torch.Tensor, zj: torch.Tensor, 
             rij: torch.Tensor) -> torch.Tensor: # [eV / A^2]
-        return - _e * m / (2 * pi * _eps0) * torch.div(torch.mul(zi, zj), rij**3)
+        return  _e * m / (2 * pi * _eps0) * torch.div(torch.mul(zi, zj), rij**3)
 
     @torch.jit.script_if_tracing
     def switching_function(
