@@ -8,6 +8,7 @@ from abc import abstractmethod
 from typing import Callable, List, Optional, Tuple, Union
 
 import numpy as np
+import torch
 import torch.nn.functional
 from e3nn import nn, o3
 from e3nn.util.jit import compile_mode
@@ -23,11 +24,6 @@ from .irreps_tools import (
 from .radial import BesselBasis, PolynomialCutoff
 from .symmetric_contraction import SymmetricContraction
 
-e_Ang2C_m = _e / m # [e/Ang] -> [C/m]
-
-@torch.jit.script_if_tracing
-def exponential_envelope(a, b, x):
-    return torch.einsum('i,ij->j', a, torch.exp(torch.outer(b, x)))
 
 @compile_mode("script")
 class ZBLBlock(torch.nn.Module):
@@ -44,12 +40,32 @@ class ZBLBlock(torch.nn.Module):
         self.rinner = rinner if rinner is torch.Tensor else torch.tensor(rinner)
         self.router = router if router is torch.Tensor else torch.tensor(router)
 
+    @torch.jit.script_if_tracing
+    def exponential_envelope(self, a, b, x):
+        return torch.einsum('i,ij->j', a, torch.exp(torch.outer(b, x)))
+
+    @torch.jit.script_if_tracing
     def repulsion_energy(
             self, 
             zi: torch.Tensor, zj: torch.Tensor, 
             rij: torch.Tensor) -> torch.Tensor: # [eV]
-        return e_Ang2C_m / (4 * pi * _eps0) * torch.div(torch.mul(zi, zj), rij)
+        return _e * m  / (4 * pi * _eps0) * torch.div(torch.mul(zi, zj), rij)
+    
+    @torch.jit.script_if_tracing
+    def grad_repulsion_energy(
+            self, 
+            zi: torch.Tensor, zj: torch.Tensor, 
+            rij: torch.Tensor) -> torch.Tensor: # [eV / A]
+        return - _e * m / (4 * pi * _eps0) * torch.div(torch.mul(zi, zj), rij**2)
+    
+    @torch.jit.script_if_tracing
+    def gradd_repulsion_energy(
+            self, 
+            zi: torch.Tensor, zj: torch.Tensor, 
+            rij: torch.Tensor) -> torch.Tensor: # [eV / A^2]
+        return - _e * m / (2 * pi * _eps0) * torch.div(torch.mul(zi, zj), rij**3)
 
+    @torch.jit.script_if_tracing
     def switching_function(
             self, 
             zi: torch.Tensor,
@@ -57,26 +73,17 @@ class ZBLBlock(torch.nn.Module):
             rij: torch.Tensor
             ) -> torch.Tensor: # [eV]
         
-        routers = self.router.expand_as(rij).clone().detach().requires_grad_(True) # type: ignore
+        router = self.router.clone().detach().to(device=rij.device, dtype=rij.dtype)
 
-        repulsion_router = self.repulsion_energy(zi, zj, routers)
+        repulsion_routers = self.repulsion_energy(zi, zj, router)
+        
+        grad1 = self.grad_repulsion_energy(zi, zj, router)
+        grad2 = self.gradd_repulsion_energy(zi, zj, router)
 
-        grad1 = torch.autograd.grad(
-            outputs=repulsion_router,
-            inputs=routers,
-            retain_graph=True,
-            create_graph=True
-        )[0]
-
-        grad2 = torch.autograd.grad(
-            outputs=grad1,
-            inputs=routers,
-            create_graph=True
-        )[0]
-
+        
         A = (-3 * grad1 + (self.router - self.rinner) * grad2) / (self.router - self.rinner)**2
         B = (2 * grad1 - (self.router - self.rinner) * grad2) / (self.router - self.rinner)**3
-        C = - repulsion_router + 1./2. * (self.router - self.rinner) * grad1 \
+        C = - repulsion_routers + 1./2. * (self.router - self.rinner) * grad1 \
             - 1./12. * (self.router - self.rinner)**2 * grad2
 
         switching = torch.where(rij < self.rinner, C, A/3. * (rij - self.rinner)**3 + B/4. * (rij - self.rinner)**4 + C)
@@ -99,14 +106,14 @@ class ZBLBlock(torch.nn.Module):
         cell = cell.view(-1, 3, 3)
         # vij = positions[edge_dst] - positions[edge_src] + torch.matmul(edge_shift, cell)
         vij = positions[edge_dst] - positions[edge_src] + torch.einsum('bi,bij->bj', edge_shift, cell[batch[edge_src]])
-        rij = torch.sqrt(torch.sum(torch.pow(vij, 2), dim=-1)).requires_grad_()
+        rij = torch.sqrt(torch.sum(torch.pow(vij, 2), dim=-1))
 
-        zs_src = zs[edge_src].to(dtype=rij.dtype).requires_grad_()
-        zs_dst = zs[edge_dst].to(dtype=rij.dtype).requires_grad_()
+        zs_src = zs[edge_src].to(device=rij.device, dtype=rij.dtype)
+        zs_dst = zs[edge_dst].to(device=rij.device, dtype=rij.dtype)
 
         aij = 0.46850 / (torch.pow(zs_src, 0.23) + torch.pow(zs_dst, 0.23))
 
-        envelope = exponential_envelope(
+        envelope = self.exponential_envelope(
             a=self.a.to(device=rij.device, dtype=rij.dtype),
             b=self.b.to(device=rij.device, dtype=rij.dtype),
             x=rij / aij
