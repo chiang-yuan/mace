@@ -30,6 +30,9 @@ class ZBLBlock(torch.nn.Module):
     """Ziegler-Biersack-Littmark (ZBL) screened nuclear repulsion"""
     a = torch.tensor([0.18175, 0.50986, 0.28022, 0.02817])
     b = torch.tensor([-3.19980, -0.94229, -0.40290, -0.20162])
+
+    a0 = 0.46850
+    p = 0.23
     def __init__(
             self,
             rinner: Union[float, torch.Tensor],
@@ -39,51 +42,63 @@ class ZBLBlock(torch.nn.Module):
 
         self.rinner = rinner if rinner is torch.Tensor else torch.tensor(rinner)
         self.router = router if router is torch.Tensor else torch.tensor(router)
+        
 
     @torch.jit.script_if_tracing
-    def exponential_envelope(self, a, b, x):
-        return torch.einsum('i,ij->j', a, torch.exp(torch.outer(b, x)))
+    def phi(self, x):
+        return torch.einsum('i,ij->j', self.a, torch.exp(torch.outer(self.b, x)))
+    
+    @torch.jit.script_if_tracing
+    def d_phi(self, x):
+        return torch.einsum('i,ij->j', self.a * self.b , torch.exp(torch.outer(self.b, x)))
+    
+    @torch.jit.script_if_tracing
+    def dd_phi(self, x):
+        return torch.einsum('i,ij->j', self.a * self.b**2, torch.exp(torch.outer(self.b, x)))
 
     @torch.jit.script_if_tracing
-    def repulsion_energy(
+    def eij(
             self, 
             zi: torch.Tensor, zj: torch.Tensor, 
             rij: torch.Tensor) -> torch.Tensor: # [eV]
         return _e * m  / (4 * pi * _eps0) * torch.div(torch.mul(zi, zj), rij)
     
     @torch.jit.script_if_tracing
-    def grad_repulsion_energy(
+    def d_eij(
             self, 
             zi: torch.Tensor, zj: torch.Tensor, 
             rij: torch.Tensor) -> torch.Tensor: # [eV / A]
         return - _e * m / (4 * pi * _eps0) * torch.div(torch.mul(zi, zj), rij**2)
     
     @torch.jit.script_if_tracing
-    def gradd_repulsion_energy(
+    def dd_eij(
             self, 
             zi: torch.Tensor, zj: torch.Tensor, 
             rij: torch.Tensor) -> torch.Tensor: # [eV / A^2]
-        return  _e * m / (2 * pi * _eps0) * torch.div(torch.mul(zi, zj), rij**3)
+        return _e * m / (2 * pi * _eps0) * torch.div(torch.mul(zi, zj), rij**3)
 
     @torch.jit.script_if_tracing
-    def switching_function(
+    def switch_fn(
             self, 
             zi: torch.Tensor,
             zj: torch.Tensor, 
             rij: torch.Tensor
             ) -> torch.Tensor: # [eV]
         
-        router = self.router.clone().detach().to(device=rij.device, dtype=rij.dtype)
+        aij = self.a0 / (torch.pow(zi, self.p) + torch.pow(zj, self.p))
 
-        repulsion_routers = self.repulsion_energy(zi, zj, router)
+        xrouter = self.router / aij
+
+        energy = self.eij(zi, zj, self.router) * self.phi(xrouter)  # type: ignore
+
+        grad1 = self.d_eij(zi, zj, self.router) * self.phi(xrouter) + self.eij(zi, zj, self.router) * self.d_phi(xrouter) # type: ignore
         
-        grad1 = self.grad_repulsion_energy(zi, zj, router)
-        grad2 = self.gradd_repulsion_energy(zi, zj, router)
-
+        grad2 = self.dd_eij(zi, zj, self.router) * self.phi(xrouter) + self.d_eij(zi, zj, self.router) * self.d_phi(xrouter) \
+            + self.d_eij(zi, zj, self.router) * self.d_phi(xrouter) + self.eij(zi, zj, self.router) * self.dd_phi(xrouter) # type: ignore
         
         A = (-3 * grad1 + (self.router - self.rinner) * grad2) / (self.router - self.rinner)**2
         B = (2 * grad1 - (self.router - self.rinner) * grad2) / (self.router - self.rinner)**3
-        C = - repulsion_routers + 1./2. * (self.router - self.rinner) * grad1 \
+        C = - energy + 1./2. * (self.router - self.rinner) * grad1 \
             - 1./12. * (self.router - self.rinner)**2 * grad2
 
         switching = torch.where(rij < self.rinner, C, A/3. * (rij - self.rinner)**3 + B/4. * (rij - self.rinner)**4 + C)
@@ -111,18 +126,13 @@ class ZBLBlock(torch.nn.Module):
         zs_src = zs[edge_src].to(device=rij.device, dtype=rij.dtype)
         zs_dst = zs[edge_dst].to(device=rij.device, dtype=rij.dtype)
 
-        aij = 0.46850 / (torch.pow(zs_src, 0.23) + torch.pow(zs_dst, 0.23))
+        aij = self.a0 / (torch.pow(zs_src, self.p) + torch.pow(zs_dst, self.p))
+        self.a = self.a.to(device=rij.device, dtype=rij.dtype)
+        self.b = self.b.to(device=rij.device, dtype=rij.dtype)
 
-        envelope = self.exponential_envelope(
-            a=self.a.to(device=rij.device, dtype=rij.dtype),
-            b=self.b.to(device=rij.device, dtype=rij.dtype),
-            x=rij / aij
-            )
-
-        energy_pair = self.repulsion_energy(zs_src, zs_dst, rij) * envelope \
-            + self.switching_function(zs_src, zs_dst, rij)
+        energy_pair = self.eij(zs_src, zs_dst, rij) * self.phi(rij / aij) + self.switch_fn(zs_src, zs_dst, rij)
         
-        self.energy = 0.5* torch.sum(torch.where(rij > self.router, 0, energy_pair))
+        self.energy = 0.5 * torch.sum(torch.where(rij > self.router, 0, energy_pair))
 
         return self.energy
 
