@@ -288,7 +288,7 @@ def main() -> None:
             atomic_inter_scale=std,
             atomic_inter_shift=mean,
             radial_MLP=ast.literal_eval(args.radial_MLP),
-            rinner=1.9,
+            rinner=1.5,
             router=2.0
         )
     elif args.model == "ScaleShiftBOTNet":
