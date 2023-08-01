@@ -7,19 +7,18 @@
 import dataclasses
 import logging
 import time
-from typing import Any, Dict, Optional, Tuple, Union, List
 from contextlib import nullcontext
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import torch
-from torch.optim.swa_utils import SWALR, AveragedModel
-from torch.utils.data import DataLoader
-from torch_ema import ExponentialMovingAverage
-from torchmetrics import Metric
-
 import torch.distributed
 from torch.nn.parallel import DistributedDataParallel
+from torch.optim.swa_utils import SWALR, AveragedModel
+from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
+from torch_ema import ExponentialMovingAverage
+from torchmetrics import Metric
 
 from . import torch_geometric
 from .checkpoint import CheckpointHandler, CheckpointState
@@ -202,16 +201,16 @@ def train(
                 if valid_loss >= lowest_loss:
                     patience_counter += 1
                     if swa is not None:
-                    if patience_counter >= patience and epoch < swa.start:
+                        if patience_counter >= patience and epoch < swa.start:
+                                logging.info(
+                                    f"Stopping optimization after {patience_counter} epochs without improvement and starting swa"
+                                )
+                                epoch = swa.start
+                        elif patience_counter >= patience:
                             logging.info(
-                                f"Stopping optimization after {patience_counter} epochs without improvement and starting swa"
+                                f"Stopping optimization after {patience_counter} epochs without improvement"
                             )
-                            epoch = swa.start
-                    elif patience_counter >= patience:
-                        logging.info(
-                            f"Stopping optimization after {patience_counter} epochs without improvement"
-                        )
-                        break
+                            break
                 else:
                     lowest_loss = valid_loss
                     patience_counter = 0
