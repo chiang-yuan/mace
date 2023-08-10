@@ -4,9 +4,9 @@
 # This program is distributed under the MIT License (see MIT.md)
 ###########################################################################################
 
+import ast
 import dataclasses
 import logging
-import ast
 import os
 from typing import Dict, List, Optional, Tuple
 
@@ -15,8 +15,7 @@ import torch.distributed
 from prettytable import PrettyTable
 
 from mace import data, modules
-from mace.data import AtomicData
-from mace.tools import AtomicNumberTable, evaluate, torch_geometric
+from mace.tools import evaluate
 
 
 @dataclasses.dataclass
@@ -188,7 +187,7 @@ def get_loss_fn(loss: str,
             dipole_weight=dipole_weight,
         )
     else:
-        loss_fn = modules.EnergyForcesLoss(
+        loss_fn = modules.WeightedEnergyForcesLoss(
             energy_weight=energy_weight, forces_weight=forces_weight
         )
     return loss_fn

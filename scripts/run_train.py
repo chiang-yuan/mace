@@ -12,14 +12,12 @@ from pathlib import Path
 from typing import Optional
 
 import numpy as np
+import torch.distributed
 import torch.nn.functional
 from e3nn import o3
+from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim.swa_utils import SWALR, AveragedModel
 from torch_ema import ExponentialMovingAverage
-
-import torch.distributed
-from torch.nn.parallel import DistributedDataParallel as DDP
-from mace.tools.slurm_distributed import DistributedEnvironment
 
 import mace
 from mace import data, modules, tools
@@ -34,6 +32,7 @@ from mace.tools.scripts_utils import (
     get_files_with_suffix,
     get_loss_fn,
 )
+from mace.tools.slurm_distributed import DistributedEnvironment
 
 
 def main() -> None:
