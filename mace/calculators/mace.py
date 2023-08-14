@@ -11,9 +11,9 @@ from typing import Union
 
 import numpy as np
 import torch
+
 from ase.calculators.calculator import Calculator, all_changes
 from ase.stress import full_3x3_to_voigt_6_stress
-
 from mace import data
 from mace.tools import torch_geometric, torch_tools, utils
 
@@ -98,7 +98,7 @@ class MACECalculator(Calculator):
             torch.load(f=model_path, map_location=device) for model_path in model_paths
         ]
         for model in self.models:
-            model.to(device)  # shouldn't be necessary but seems to help with GPU
+            model.double().to(device)  # shouldn't be necessary but seems to help with GPU
         r_maxs = [model.r_max.cpu() for model in self.models]
         r_maxs = np.array(r_maxs)
         assert np.all(
