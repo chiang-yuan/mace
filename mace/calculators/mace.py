@@ -253,7 +253,7 @@ class MACECalculator(Calculator):
 
     def get_descriptors(
         self, atoms=None, invariants_only=True, num_layers=-1
-    ) -> np.ndarray | list[np.ndarray]:
+    ) -> Union[np.ndarray, list[np.ndarray]]:
         """Extracts the descriptors from MACE model.
         :param atoms: ase.Atoms object
         :param invariants_only: bool, if True only the invariant descriptors are returned

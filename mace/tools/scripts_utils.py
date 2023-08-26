@@ -294,6 +294,12 @@ def get_loss_fn(loss: str,
             forces_weight=forces_weight,
             dipole_weight=dipole_weight,
         )
+    elif loss == "uip":
+        loss_fn = modules.ConditionalWeightedEnergyForcesStressLoss(
+            energy_weight=energy_weight,
+            forces_weight=forces_weight,
+            stress_weight=stress_weight,
+        )
     else:
         loss_fn = modules.WeightedEnergyForcesLoss(
             energy_weight=energy_weight, forces_weight=forces_weight

@@ -7,9 +7,7 @@
 import ast
 import json
 import logging
-import os
 from pathlib import Path
-from typing import Optional
 
 import numpy as np
 import torch.distributed
@@ -25,11 +23,9 @@ from mace.data import HDF5Dataset
 from mace.tools import torch_geometric
 from mace.tools.scripts_utils import (
     LRScheduler,
-    create_error_table,
     get_atomic_energies,
     get_config_type_weights,
     get_dataset_from_xyz,
-    get_files_with_suffix,
     get_loss_fn,
 )
 from mace.tools.slurm_distributed import DistributedEnvironment
@@ -145,13 +141,6 @@ def main() -> None:
         else:
             atomic_energies_dict = get_atomic_energies(args.E0s, None, z_table)
 
-
-    if atomic_energies_dict is None or len(atomic_energies_dict) == 0:
-        if args.train_file.endswith(".xyz"):
-            atomic_energies_dict = get_atomic_energies(args.E0s, collections.train, z_table)
-        else:
-            atomic_energies_dict = get_atomic_energies(args.E0s, None, z_table)
-
     if args.model == "AtomicDipolesMACE":
         atomic_energies = None
         dipole_only = True
@@ -204,21 +193,10 @@ def main() -> None:
             drop_last=True,
             seed=args.seed,
         )
-        valid_loader = torch_geometric.dataloader.DataLoader(
-            dataset=[
-                data.AtomicData.from_config(config, z_table=z_table, cutoff=args.r_max)
-                for config in collections.valid
-            ],
-            batch_size=args.valid_batch_size,
-            shuffle=False,
-            drop_last=False,
-            num_workers=args.num_workers,
-        )
-    else:
-        training_set_processed = HDF5Dataset(args.train_file)
-        train_loader = torch_geometric.dataloader.DataLoader(
-            training_set_processed,
-            batch_size=args.batch_size,
+        valid_sampler = torch.utils.data.distributed.DistributedSampler(
+            valid_set, 
+            num_replicas=world_size, 
+            rank=rank,
             shuffle=True,
             drop_last=True,
             seed=args.seed,
@@ -233,7 +211,7 @@ def main() -> None:
         pin_memory=args.pin_memory,
         num_workers=args.num_workers,
     )
-    valid_loader = torch_geometric.dataloader.DataLoader(
+    torch_geometric.dataloader.DataLoader(
         dataset=valid_set,
         batch_size=args.valid_batch_size,
         sampler=valid_sampler,
@@ -291,7 +269,6 @@ def main() -> None:
     ), "All channels must have the same dimension, use the num_channels and max_L keywords to specify the number of channels and the maximum L"
 
     logging.info(f"Hidden irreps: {args.hidden_irreps}")
-
 
     model_config = dict(
         r_max=args.r_max,
@@ -447,11 +424,10 @@ def main() -> None:
     else:
         optimizer = torch.optim.Adam(**param_options)
 
-    logger = tools.MetricsLogger(directory=args.results_dir, tag=tag + "_train")
+    tools.MetricsLogger(directory=args.results_dir, tag=tag + "_train")
 
     lr_scheduler = LRScheduler(optimizer, args)
 
-    swa: Optional[tools.SWAContainer] = None
     swas = [False]
     if args.swa:
         assert dipole_only is False, "swa for dipole fitting not implemented"
@@ -483,12 +459,6 @@ def main() -> None:
             logging.info(
                 f"Using stochastic weight averaging (after {args.start_swa} epochs) with energy weight : {args.swa_energy_weight}, forces weight : {args.swa_forces_weight}, dipole weight : {args.swa_dipole_weight} and learning rate : {args.swa_lr}"
             )
-        elif args.loss == "uip":
-            loss_fn_energy = modules.ConditionalWeightedEnergyForcesStressLoss(
-                energy_weight=args.swa_energy_weight,
-                forces_weight=args.swa_forces_weight,
-                stress_weight=args.swa_stress_weight,
-            )
         else:
             loss_fn_energy = modules.WeightedEnergyForcesLoss(
                 energy_weight=args.swa_energy_weight,
@@ -497,7 +467,7 @@ def main() -> None:
             logging.info(
                 f"Using stochastic weight averaging (after {args.start_swa} epochs) with energy weight : {args.swa_energy_weight}, forces weight : {args.swa_forces_weight} and learning rate : {args.swa_lr}"
             )
-        swa = tools.SWAContainer(
+        tools.SWAContainer(
             model=AveragedModel(model),
             scheduler=SWALR(
                 optimizer=optimizer,
@@ -516,7 +486,6 @@ def main() -> None:
         swa_start=args.start_swa,
     )
 
-    start_epoch = 0
     if args.restart_latest:
         try:
             opt_start_epoch = checkpoint_handler.load_latest(
@@ -531,11 +500,10 @@ def main() -> None:
                 device=device,
             )
         if opt_start_epoch is not None:
-            start_epoch = opt_start_epoch
+            pass
 
-    ema: Optional[ExponentialMovingAverage] = None
     if args.ema:
-        ema = ExponentialMovingAverage(model.parameters(), decay=args.ema_decay)
+        ExponentialMovingAverage(model.parameters(), decay=args.ema_decay)
 
     logging.info(model)
     logging.info(f"Number of parameters: {tools.count_parameters(model)}")
@@ -559,118 +527,25 @@ def main() -> None:
         wandb.run.summary["params"] = args_dict_json
 
     if args.distributed:
-        distributed_model = DDP(model, device_ids=[local_rank])
+        DDP(model, device_ids=[local_rank])
     else:
-        distributed_model = None
+        pass
 
-    tools.train(
-        model=model,
-        loss_fn=loss_fn,
-        train_loader=train_loader,
-        valid_loader=valid_loader,
-        optimizer=optimizer,
-        lr_scheduler=lr_scheduler,
-        checkpoint_handler=checkpoint_handler,
-        eval_interval=args.eval_interval,
-        start_epoch=start_epoch,
-        max_num_epochs=args.max_num_epochs,
-        logger=logger,
-        patience=args.patience,
-        output_args=output_args,
-        device=device,
-        swa=swa,
-        ema=ema,
-        max_grad_norm=args.clip_grad,
-        log_errors=args.error_table,
-        log_wandb=args.wandb,
-        distributed=args.distributed,
-        distributed_model=distributed_model,
-        train_sampler=train_sampler,
-        rank=rank,
-    )
+    if rank == 0:
+        # Save entire model
+        model_path = Path(args.checkpoints_dir) / (tag + ".model")
+        logging.info(f"Saving model to {model_path}")
+        if args.save_cpu:
+            model = model.to("cpu")
+        torch.save(model, model_path)
 
-    logging.info("Computing metrics for training, validation, and test sets")
-    
-    all_data_loaders = {
-        "train": train_loader,
-        "valid": valid_loader,
-    }
-    
-    test_sets = {}
-    if args.train_file.endswith(".xyz"):
-        for name, subset in collections.tests:
-            test_sets[name] = [
-                data.AtomicData.from_config(config, z_table=z_table, cutoff=args.r_max)
-                for config in subset
-            ]
-    else:
-        test_files = get_files_with_suffix(args.test_dir, "_test.h5")
-        for test_file in test_files:
-            name = os.path.splitext(os.path.basename(test_file))[0]
-            test_sets[name] = HDF5Dataset(test_file, r_max=args.r_max, z_table=z_table)
-            
-    for test_name, test_set in test_sets.items():
-        test_sampler = None
-        if args.distributed:
-            test_sampler = torch.utils.data.distributed.DistributedSampler(
-                test_set, 
-                num_replicas=world_size, 
-                rank=rank,
-                shuffle=True,
-                drop_last=True,
-                seed=args.seed,
-            )
-        test_loader = torch_geometric.dataloader.DataLoader(
-            test_set,
-            batch_size=args.valid_batch_size,
-            shuffle=(test_sampler is None),
-            drop_last=test_set.drop_last,
-            num_workers=args.num_workers,
-            pin_memory=args.pin_memory,
-        )
-        all_data_loaders[test_name] = test_loader
-                        
-    for swa_eval in swas:
-        epoch = checkpoint_handler.load_latest(
-            state=tools.CheckpointState(model, optimizer, lr_scheduler),
-            swa=swa_eval,
-            device=device,
-        )
-        model.to(device)
-        if args.distributed:
-            distributed_model = DDP(model, device_ids=[local_rank])
-        model_to_evaluate = model if not args.distributed else distributed_model
-        logging.info(f"Loaded model from epoch {epoch}")
+    if args.distributed:
+        torch.distributed.barrier()
 
-        table = create_error_table(
-            table_type=args.error_table,
-            all_data_loaders=all_data_loaders,
-            model=model_to_evaluate,
-            loss_fn=loss_fn,
-            output_args=output_args,
-            log_wandb=args.wandb,
-            device=device,
-            distributed=args.distributed,
-        )
-        logging.info("\n" + str(table))
-        
-        if rank == 0:
-            # Save entire model
-            if swa_eval:
-                model_path = Path(args.checkpoints_dir) / (tag + "_swa.model")
-            else:
-                model_path = Path(args.checkpoints_dir) / (tag + ".model")
-            logging.info(f"Saving model to {model_path}")
-            if args.save_cpu:
-                model = model.to("cpu")
-            torch.save(model, model_path)
+    logging.info("Done")    
+    if args.distributed:
+        torch.distributed.destroy_process_group()
 
-        if swa_eval:
-            torch.save(model, Path(args.model_dir) / (args.name + "_swa.model"))
-        else:
-            torch.save(model, Path(args.model_dir) / (args.name + ".model"))
-
-    logging.info("Done")
 
 if __name__ == "__main__":
     main()

@@ -21,6 +21,7 @@ from .blocks import (
     ScaleShiftBlock,
 )
 from .loss import (
+    ConditionalWeightedEnergyForcesStressLoss,
     DipoleSingleLoss,
     WeightedEnergyForcesDipoleLoss,
     WeightedEnergyForcesLoss,
@@ -97,6 +98,7 @@ __all__ = [
     "DipoleSingleLoss",
     "WeightedEnergyForcesDipoleLoss",
     "WeightedHuberEnergyForcesStressLoss",
+    "ConditionalWeightedEnergyForcesStressLoss",
     "SymmetricContraction",
     "interaction_classes",
     "compute_mean_std_atomic_inter_energy",

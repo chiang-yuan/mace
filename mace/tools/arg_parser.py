@@ -342,6 +342,7 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
             "dipole",
             "huber",
             "energy_forces_dipole",
+            "uip"
         ],
     )
     parser.add_argument(

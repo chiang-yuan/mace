@@ -69,6 +69,42 @@ def mean_squared_error_forces(ref: Batch, pred: TensorDict) -> torch.Tensor:
         * torch.square(ref["forces"] - pred["forces"])
     )  # []
 
+def conditional_mse_forces(ref: Batch, pred: TensorDict) -> torch.Tensor:
+    # forces: [n_atoms, 3]
+    configs_weight = torch.repeat_interleave(
+        ref.weight, ref.ptr[1:] - ref.ptr[:-1]
+    ).unsqueeze(
+        -1
+    )  # [n_atoms, 1]
+    configs_forces_weight = torch.repeat_interleave(
+        ref.forces_weight, ref.ptr[1:] - ref.ptr[:-1]
+    ).unsqueeze(
+        -1
+    )  # [n_atoms, 1]
+
+    err = ref["forces"] - pred["forces"]
+
+    # Define the multiplication factors for each condition
+    factors = torch.tensor([100, 10, 1, 0.1])
+
+    # Apply multiplication factors based on conditions
+    c1 = torch.abs(err) < 0.1
+    c2 = (torch.abs(err) >= 0.1) & (torch.abs(err) < 1)
+    c3 = (torch.abs(err) >= 1) & (torch.abs(err) < 10)
+
+    se = torch.zeros_like(err)
+
+    se[c1] = torch.square(err[c1]) * factors[0]
+    se[c2] = torch.square(err[c2]) * factors[1]
+    se[c3] = torch.square(err[c3]) * factors[2]
+    se[~(c1 | c2 | c3)] = torch.square(err[~(c1 | c2 | c3)]) * factors[3]
+    
+    return torch.mean(
+        configs_weight *
+        configs_forces_weight *
+        se
+        )
+
 
 def weighted_mean_squared_error_dipole(ref: Batch, pred: TensorDict) -> torch.Tensor:
     # dipole: [n_graphs, ]
@@ -136,6 +172,35 @@ class WeightedEnergyForcesStressLoss(torch.nn.Module):
         return (
             self.energy_weight * weighted_mean_squared_error_energy(ref, pred)
             + self.forces_weight * mean_squared_error_forces(ref, pred)
+            + self.stress_weight * weighted_mean_squared_stress(ref, pred)
+        )
+
+    def __repr__(self):
+        return (
+            f"{self.__class__.__name__}(energy_weight={self.energy_weight:.3f}, "
+            f"forces_weight={self.forces_weight:.3f}, stress_weight={self.stress_weight:.3f})"
+        )
+
+class ConditionalWeightedEnergyForcesStressLoss(torch.nn.Module):
+    def __init__(self, energy_weight=1.0, forces_weight=1.0, stress_weight=1.0) -> None:
+        super().__init__()
+        self.register_buffer(
+            "energy_weight",
+            torch.tensor(energy_weight, dtype=torch.get_default_dtype()),
+        )
+        self.register_buffer(
+            "forces_weight",
+            torch.tensor(forces_weight, dtype=torch.get_default_dtype()),
+        )
+        self.register_buffer(
+            "stress_weight",
+            torch.tensor(stress_weight, dtype=torch.get_default_dtype()),
+        )
+
+    def forward(self, ref: Batch, pred: TensorDict) -> torch.Tensor:
+        return (
+            self.energy_weight * weighted_mean_squared_error_energy(ref, pred)
+            + self.forces_weight * conditional_mse_forces(ref, pred)
             + self.stress_weight * weighted_mean_squared_stress(ref, pred)
         )
 
