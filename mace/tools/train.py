@@ -65,12 +65,12 @@ def train(
     distributed_model: Optional[DistributedDataParallel] = None,
     train_sampler: Optional[DistributedSampler] = None,
     rank: Optional[int] = 0,
+    keep_last = False
 ):
     lowest_loss = np.inf
     valid_loss = np.inf
     patience_counter = 0
     swa_start = True
-    keep_last = False
     if log_wandb:
         import wandb
 
@@ -169,8 +169,11 @@ def train(
                 elif log_errors == "PerAtomMAE":
                     error_e = eval_metrics["mae_e_per_atom"] * 1e3
                     error_f = eval_metrics["mae_f"] * 1e3
+                    error_s = eval_metrics["mae_stress_per_atom"] * 1e3
+                    
                     logging.info(
                         f"Epoch {epoch}: loss={valid_loss:.4f}, MAE_E_per_atom={error_e:.1f} meV, MAE_F={error_f:.1f} meV / A"
+                        f", MAE_stress_per_atom={error_s:.1f} meV / A^3"
                     )
                 elif log_errors == "TotalMAE":
                     error_e = eval_metrics["mae_e"] * 1e3
@@ -221,14 +224,14 @@ def train(
                                 epochs=epoch,
                                 keep_last=keep_last,
                             )
-                            keep_last = False
+                            # keep_last = False
                     else:
                         checkpoint_handler.save(
                             state=CheckpointState(model, optimizer, lr_scheduler),
                             epochs=epoch,
                             keep_last=keep_last,
                         )
-                        keep_last = False
+                        # keep_last = False
         if distributed:
             torch.distributed.barrier()
         epoch += 1
@@ -431,6 +434,7 @@ class MACELoss(Metric):
             delta_stress = self.convert(self.delta_stress)
             delta_stress_per_atom = self.convert(self.delta_stress_per_atom)
             aux["mae_stress"] = compute_mae(delta_stress)
+            aux["mae_stress_per_atom"] = compute_mae(delta_stress_per_atom)
             aux["rmse_stress"] = compute_rmse(delta_stress)
             aux["rmse_stress_per_atom"] = compute_rmse(delta_stress_per_atom)
             aux["q95_stress"] = compute_q95(delta_stress)

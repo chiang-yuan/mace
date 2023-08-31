@@ -82,15 +82,15 @@ def conditional_mse_forces(ref: Batch, pred: TensorDict) -> torch.Tensor:
         -1
     )  # [n_atoms, 1]
 
-    err = ref["forces"] - pred["forces"]
-
     # Define the multiplication factors for each condition
-    factors = torch.tensor([100, 10, 1, 0.1])
+    factors = torch.tensor([1, 0.5, 0.25, 0.125])
 
     # Apply multiplication factors based on conditions
-    c1 = torch.abs(err) < 0.1
-    c2 = (torch.abs(err) >= 0.1) & (torch.abs(err) < 1)
-    c3 = (torch.abs(err) >= 1) & (torch.abs(err) < 10)
+    c1 = torch.abs(ref["forces"]) < 0.1
+    c2 = (torch.abs(ref["forces"]) >= 0.1) & (torch.abs(ref["forces"]) < 1)
+    c3 = (torch.abs(ref["forces"]) >= 1) & (torch.abs(ref["forces"]) < 10)
+
+    err = ref["forces"] - pred["forces"]
 
     se = torch.zeros_like(err)
 
