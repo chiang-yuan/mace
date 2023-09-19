@@ -125,8 +125,12 @@ def voigt_to_matrix(t: torch.Tensor):
 
 
 def init_wandb(project: str, entity: str, name: str, config: dict):
-    import wandb
+    import os
 
+    os.environ["WANDB__SERVICE_WAIT"] = "300"
+
+    import wandb
+    
     wandb.init(
         project=project, entity=entity, name=name, config=config, 
         settings=wandb.Settings(_service_wait=300)

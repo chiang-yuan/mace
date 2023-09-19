@@ -265,6 +265,9 @@ def main() -> None:
         compute_virials = True
         args.compute_stress = True
         args.error_table = "PerAtomRMSEstressvirials"
+    
+    if args.loss == "uip" and args.compute_stress:
+        compute_virials = True
 
     output_args = {
         "energy": compute_energy,
