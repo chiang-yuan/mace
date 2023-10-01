@@ -42,32 +42,32 @@ def main() -> None:
         try:
             distr_env = DistributedEnvironment()
         except Exception as e:
-            logging.info(f'Error specifying environment for distributed training: {e}')
+            logging.info(f"Error specifying environment for distributed training: {e}")
             return
         world_size = distr_env.world_size
         local_rank = distr_env.local_rank
         rank = distr_env.rank
         if rank == 0:
             print(distr_env)
-        torch.distributed.init_process_group(backend='nccl')
+        torch.distributed.init_process_group(backend="nccl")
     else:
         rank = int(0)
-        
+
     # Setup
     tools.set_seeds(args.seed)
     tools.setup_logger(level=args.log_level, tag=tag, directory=args.log_dir, rank=rank)
-    
+
     if args.distributed:
         torch.cuda.set_device(local_rank)
         logging.info(f"Process group initialized: {torch.distributed.is_initialized()}")
         logging.info(f"Processes: {world_size}")
-    
+
     try:
         logging.info(f"MACE version: {mace.__version__}")
     except AttributeError:
         logging.info("Cannot find MACE version, please install MACE via pip")
     logging.info(f"Configuration: {args}")
-    
+
     tools.set_default_dtype(args.default_dtype)
     device = tools.init_device(args.device)
 
@@ -180,35 +180,31 @@ def main() -> None:
             for config in collections.valid
         ]
     else:
-        train_set = HDF5Dataset(
-            args.train_file, r_max=args.r_max, z_table=z_table
-        )
-        valid_set = HDF5Dataset(
-            args.valid_file, r_max=args.r_max, z_table=z_table
-        )
-        
+        train_set = HDF5Dataset(args.train_file, r_max=args.r_max, z_table=z_table)
+        valid_set = HDF5Dataset(args.valid_file, r_max=args.r_max, z_table=z_table)
+
     train_sampler, valid_sampler = None, None
     if args.distributed:
         train_sampler = torch.utils.data.distributed.DistributedSampler(
-            train_set, 
-            num_replicas=world_size, 
+            train_set,
+            num_replicas=world_size,
             rank=rank,
             shuffle=True,
             drop_last=True,
             seed=args.seed,
         )
         valid_sampler = torch.utils.data.distributed.DistributedSampler(
-            valid_set, 
-            num_replicas=world_size, 
+            valid_set,
+            num_replicas=world_size,
             rank=rank,
             shuffle=True,
             drop_last=True,
             seed=args.seed,
         )
-        
+
     train_loader = torch_geometric.dataloader.DataLoader(
         dataset=train_set,
-        batch_size=args.batch_size,        
+        batch_size=args.batch_size,
         sampler=train_sampler,
         shuffle=(train_sampler is None),
         drop_last=False,
@@ -224,7 +220,7 @@ def main() -> None:
         pin_memory=args.pin_memory,
         num_workers=args.num_workers,
     )
-    
+
     loss_fn: torch.nn.Module = get_loss_fn(
         args.loss,
         args.energy_weight,
@@ -247,6 +243,9 @@ def main() -> None:
         compute_virials = True
         args.compute_stress = True
         args.error_table = "PerAtomRMSEstressvirials"
+
+    if args.loss == "uip" and args.compute_stress:
+        compute_virials = True
 
     output_args = {
         "energy": compute_energy,
@@ -321,9 +320,9 @@ def main() -> None:
             MLP_irreps=o3.Irreps(args.MLP_irreps),
             atomic_inter_scale=args.std,
             atomic_inter_shift=args.mean,
-            # TODO: the following options exist in `multi-GPU` branch but not guassian. 
+            # TODO: the following options exist in `multi-GPU` branch but not guassian.
             # check if necessary
-            radial_MLP=ast.literal_eval(args.radial_MLP), 
+            radial_MLP=ast.literal_eval(args.radial_MLP),
             radial_type=args.radial_type,
         )
     elif args.model == "ScaleShiftBOTNet":
@@ -565,12 +564,12 @@ def main() -> None:
     )
 
     logging.info("Computing metrics for training, validation, and test sets")
-    
+
     all_data_loaders = {
         "train": train_loader,
         "valid": valid_loader,
     }
-    
+
     test_sets = {}
     if args.train_file.endswith(".xyz"):
         for name, subset in collections.tests:
@@ -583,13 +582,13 @@ def main() -> None:
         for test_file in test_files:
             name = os.path.splitext(os.path.basename(test_file))[0]
             test_sets[name] = HDF5Dataset(test_file, r_max=args.r_max, z_table=z_table)
-            
+
     for test_name, test_set in test_sets.items():
         test_sampler = None
         if args.distributed:
             test_sampler = torch.utils.data.distributed.DistributedSampler(
-                test_set, 
-                num_replicas=world_size, 
+                test_set,
+                num_replicas=world_size,
                 rank=rank,
                 shuffle=True,
                 drop_last=True,
@@ -604,7 +603,7 @@ def main() -> None:
             pin_memory=args.pin_memory,
         )
         all_data_loaders[test_name] = test_loader
-                        
+
     for swa_eval in swas:
         epoch = checkpoint_handler.load_latest(
             state=tools.CheckpointState(model, optimizer, lr_scheduler),
@@ -628,7 +627,7 @@ def main() -> None:
             distributed=args.distributed,
         )
         logging.info("\n" + str(table))
-        
+
         if rank == 0:
             # Save entire model
             if swa_eval:
@@ -644,11 +643,11 @@ def main() -> None:
                 torch.save(model, Path(args.model_dir) / (args.name + "_swa.model"))
             else:
                 torch.save(model, Path(args.model_dir) / (args.name + ".model"))
-                
+
         if args.distributed:
             torch.distributed.barrier()
 
-    logging.info("Done")    
+    logging.info("Done")
     if args.distributed:
         torch.distributed.destroy_process_group()
 

@@ -70,6 +70,39 @@ def mean_squared_error_forces(ref: Batch, pred: TensorDict) -> torch.Tensor:
     )  # []
 
 
+def conditional_mse_forces(ref: Batch, pred: TensorDict) -> torch.Tensor:
+    # forces: [n_atoms, 3]
+    configs_weight = torch.repeat_interleave(
+        ref.weight, ref.ptr[1:] - ref.ptr[:-1]
+    ).unsqueeze(
+        -1
+    )  # [n_atoms, 1]
+    configs_forces_weight = torch.repeat_interleave(
+        ref.forces_weight, ref.ptr[1:] - ref.ptr[:-1]
+    ).unsqueeze(
+        -1
+    )  # [n_atoms, 1]
+
+    # Define the multiplication factors for each condition
+    factors = torch.tensor([1, 0.5, 0.25, 0.125])
+
+    # Apply multiplication factors based on conditions
+    c1 = torch.abs(ref["forces"]) < 0.1
+    c2 = (torch.abs(ref["forces"]) >= 0.1) & (torch.abs(ref["forces"]) < 1)
+    c3 = (torch.abs(ref["forces"]) >= 1) & (torch.abs(ref["forces"]) < 10)
+
+    err = ref["forces"] - pred["forces"]
+
+    se = torch.zeros_like(err)
+
+    se[c1] = torch.square(err[c1]) * factors[0]
+    se[c2] = torch.square(err[c2]) * factors[1]
+    se[c3] = torch.square(err[c3]) * factors[2]
+    se[~(c1 | c2 | c3)] = torch.square(err[~(c1 | c2 | c3)]) * factors[3]
+
+    return torch.mean(configs_weight * configs_forces_weight * se)
+
+
 def weighted_mean_squared_error_dipole(ref: Batch, pred: TensorDict) -> torch.Tensor:
     # dipole: [n_graphs, ]
     num_atoms = (ref.ptr[1:] - ref.ptr[:-1]).unsqueeze(-1)  # [n_graphs,1]
