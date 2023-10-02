@@ -65,13 +65,13 @@ def train(
     distributed_model: Optional[DistributedDataParallel] = None,
     train_sampler: Optional[DistributedSampler] = None,
     rank: Optional[int] = 0,
-    keep_last: bool = False,
+    keep_last: bool = True,
 ):
     lowest_loss = np.inf
     valid_loss = np.inf
     patience_counter = 0
     swa_start = True
-    keep_last = False
+    keep_last = keep_last
     if log_wandb:
         import wandb
 
