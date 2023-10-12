@@ -8,6 +8,7 @@ import dataclasses
 import logging
 import time
 from contextlib import nullcontext
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
@@ -71,7 +72,6 @@ def train(
     valid_loss = np.inf
     patience_counter = 0
     swa_start = True
-    keep_last = keep_last
     if log_wandb:
         import wandb
 
@@ -176,7 +176,7 @@ def train(
                     error_f = eval_metrics["mae_f"] * 1e3
                     error_s = eval_metrics["mae_stress_per_atom"] * 1e3
                     logging.info(
-                        f"Epoch {epoch}: loss={valid_loss:.4f}, MAE_E_per_atom={error_e:.1f} meV, MAE_F={error_f:.1f} meV / A"
+                        f"Epoch {epoch}: loss={valid_loss:.4f}, MAE_E_per_atom={error_e:.1f} meV, MAE_F={error_f:.1f} meV / A, MAE_Stress={error_s:.1f} meV / A^3"
                     )
                 elif log_errors == "TotalMAE":
                     error_e = eval_metrics["mae_e"] * 1e3
@@ -224,18 +224,30 @@ def train(
                     if ema is not None:
                         with ema.average_parameters():
                             checkpoint_handler.save(
-                                state=CheckpointState(model, optimizer, lr_scheduler),
+                                state=CheckpointState(
+                                    model_to_evaluate, optimizer, lr_scheduler
+                                ),
                                 epochs=epoch,
                                 keep_last=keep_last,
                             )
                             # keep_last = False
                     else:
                         checkpoint_handler.save(
-                            state=CheckpointState(model, optimizer, lr_scheduler),
+                            state=CheckpointState(
+                                model_to_evaluate, optimizer, lr_scheduler
+                            ),
                             epochs=epoch,
                             keep_last=keep_last,
                         )
                         # keep_last = False
+
+        if rank == 0:
+            model_path = Path(checkpoint_handler.io.directory) / (
+                checkpoint_handler.io.tag + ".model"
+            )
+            logging.info(f"Saving model to {model_path}")
+            torch.save(model_to_evaluate, model_path)
+
         if distributed:
             torch.distributed.barrier()
         epoch += 1
