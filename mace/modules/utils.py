@@ -80,6 +80,7 @@ def get_symmetric_displacement(
     edge_index: torch.Tensor,
     num_graphs: int,
     batch: torch.Tensor,
+    type: str = "lagrangian",
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     if cell is None:
         cell = torch.zeros(
@@ -89,26 +90,36 @@ def get_symmetric_displacement(
             device=positions.device,
         )
     sender = edge_index[0]
-    displacement = torch.zeros(
+    # displacement gradient tensor du/dX
+    # assumed to be homogenous for entire cell
+    # initialized as zero tensor to formulate strain tensor and calculate the
+    # stress tensor
+    du = torch.zeros(
         (num_graphs, 3, 3),
         dtype=positions.dtype,
         device=positions.device,
     )
-    displacement.requires_grad_(True)
-    symmetric_displacement = 0.5 * (
-        displacement + displacement.transpose(-1, -2)
-    )  # From https://github.com/mir-group/nequip
-    positions = positions + torch.einsum(
-        "be,bec->bc", positions, symmetric_displacement[batch]
-    )
+    du.requires_grad_(True)
+    # du/dX isn't necessarily symmetric
+    # used for calculating "imaginary" atom displacements
+    positions = positions + torch.einsum("be,bec->bc", positions, du[batch])
+    # strain tensor should be strictly symmetric
+    # used for calculating "imaginary" cell deformations
+    if type == "lagrangian":
+        strain = 0.5 * (du + du.transpose(-1, -2) + du.transpose(-1, -2) @ du)
+    elif type == "infinitesimal":
+        strain = 0.5 * (du + du.transpose(-1, -2))
+    else:
+        raise NotImplementedError(f"Unknown type {type}")
+
     cell = cell.view(-1, 3, 3)
-    cell = cell + torch.matmul(cell, symmetric_displacement)
+    cell = cell + torch.matmul(cell, strain)
     shifts = torch.einsum(
         "be,bec->bc",
         unit_shifts,
         cell[batch[sender]],
     )
-    return positions, shifts, displacement
+    return positions, shifts, strain
 
 
 def get_outputs(
