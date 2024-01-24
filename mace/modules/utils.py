@@ -119,7 +119,7 @@ def get_symmetric_displacement(
         unit_shifts,
         cell[batch[sender]],
     )
-    return positions, shifts, strain
+    return positions, shifts, du
 
 
 def get_outputs(
