@@ -77,7 +77,7 @@ def valid_err_log(valid_loss, eval_metrics, logger, log_errors, epoch=None):
         )
     elif (
         log_errors == "PerAtomMAEstressvirials"
-        and eval_metrics["mae_stress_per_atom"] is not None
+        and eval_metrics["mae_stress"] is not None
     ):
         error_e = eval_metrics["mae_e_per_atom"] * 1e3
         error_f = eval_metrics["mae_f"] * 1e3
