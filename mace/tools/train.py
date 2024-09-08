@@ -83,7 +83,7 @@ def valid_err_log(valid_loss, eval_metrics, logger, log_errors, epoch=None):
         error_f = eval_metrics["mae_f"] * 1e3
         error_stress = eval_metrics["mae_stress"] * 1e3
         logging.info(
-            f"{inintial_phrase}: loss={valid_loss:8.4f}, MAE_E_per_atom={error_e:8.1f} meV, MAE_F={error_f:8.1f} meV / A, MAE_stress={error_stress:8.1f} meV / A^3"
+            f"{inintial_phrase}: loss={valid_loss:10.6e}, MAE_E_per_atom={error_e:10.6e} meV, MAE_F={error_f:10.6e} meV / A, MAE_stress={error_stress:10.6e} meV / A^3"
         )
     elif (
         log_errors == "PerAtomMAEstressvirials"
@@ -181,6 +181,9 @@ def train(
             device=device,
         )
         valid_err_log(valid_loss, eval_metrics, logger, log_errors, None)
+
+    if distributed:
+        torch.distributed.barrier()
 
     while epoch < max_num_epochs:
         # LR scheduler and SWA update
