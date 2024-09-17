@@ -250,9 +250,8 @@ def train(
                     wandb_log_dict = {
                         "epoch": epoch,
                         "valid_loss": valid_loss,
-                        "valid_rmse_e_per_atom": eval_metrics["rmse_e_per_atom"],
-                        "valid_rmse_f": eval_metrics["rmse_f"],
                     }
+                    wandb_log_dict.update(eval_metrics)
                     wandb.log(wandb_log_dict)
 
                 if valid_loss >= lowest_loss:
