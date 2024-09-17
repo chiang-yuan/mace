@@ -57,7 +57,7 @@ def valid_err_log(valid_loss, eval_metrics, logger, log_errors, epoch=None):
         )
     elif (
         log_errors == "PerAtomRMSEstressvirials"
-        and eval_metrics["rmse_stress_per_atom"] is not None
+        and eval_metrics.get("rmse_stress_per_atom", None) is not None
     ):
         error_e = eval_metrics["rmse_e_per_atom"] * 1e3
         error_f = eval_metrics["rmse_f"] * 1e3
@@ -67,7 +67,7 @@ def valid_err_log(valid_loss, eval_metrics, logger, log_errors, epoch=None):
         )
     elif (
         log_errors == "PerAtomRMSEstressvirials"
-        and eval_metrics["rmse_virials_per_atom"] is not None
+        and eval_metrics.get("rmse_virials_per_atom", None) is not None
     ):
         error_e = eval_metrics["rmse_e_per_atom"] * 1e3
         error_f = eval_metrics["rmse_f"] * 1e3
@@ -77,17 +77,7 @@ def valid_err_log(valid_loss, eval_metrics, logger, log_errors, epoch=None):
         )
     elif (
         log_errors == "PerAtomMAEstressvirials"
-        and eval_metrics["mae_stress"] is not None
-    ):
-        error_e = eval_metrics["mae_e_per_atom"] * 1e3
-        error_f = eval_metrics["mae_f"] * 1e3
-        error_stress = eval_metrics["mae_stress"] * 1e3
-        logging.info(
-            f"{inintial_phrase}: loss={valid_loss:10.6e}, MAE_E_per_atom={error_e:10.6e} meV, MAE_F={error_f:10.6e} meV / A, MAE_stress={error_stress:10.6e} meV / A^3"
-        )
-    elif (
-        log_errors == "PerAtomMAEstressvirials"
-        and eval_metrics["mae_virials_per_atom"] is not None
+        and eval_metrics.get("mae_virials_per_atom", None) is not None
     ):
         error_e = eval_metrics["mae_e_per_atom"] * 1e3
         error_f = eval_metrics["mae_f"] * 1e3
@@ -104,8 +94,9 @@ def valid_err_log(valid_loss, eval_metrics, logger, log_errors, epoch=None):
     elif log_errors == "PerAtomMAE":
         error_e = eval_metrics["mae_e_per_atom"] * 1e3
         error_f = eval_metrics["mae_f"] * 1e3
+        error_stress = eval_metrics["mae_stress"] * 1e3
         logging.info(
-            f"{inintial_phrase}: loss={valid_loss:8.4f}, MAE_E_per_atom={error_e:8.1f} meV, MAE_F={error_f:8.1f} meV / A",
+            f"{inintial_phrase}: loss={valid_loss:10.6e}, MAE_E_per_atom={error_e:10.6e} meV, MAE_F={error_f:10.6e} meV / A, MAE_stress={error_stress:10.6e} meV / A^3",
         )
     elif log_errors == "TotalMAE":
         error_e = eval_metrics["mae_e"] * 1e3
@@ -170,6 +161,9 @@ def train(
     logging.info("Loss metrics on validation set")
     epoch = start_epoch
 
+    if distributed:
+        torch.distributed.barrier()
+
     # # log validation loss before _any_ training
     param_context = ema.average_parameters() if ema is not None else nullcontext()
     with param_context:
@@ -180,7 +174,8 @@ def train(
             output_args=output_args,
             device=device,
         )
-        valid_err_log(valid_loss, eval_metrics, logger, log_errors, None)
+        if rank == 0:
+            valid_err_log(valid_loss, eval_metrics, logger, log_errors, None)
 
     if distributed:
         torch.distributed.barrier()

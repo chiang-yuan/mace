@@ -234,7 +234,7 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--compute_stress",
         help="Select True to compute stress",
-        type=bool,
+        action="store_true",
         default=False,
     )
     parser.add_argument(
