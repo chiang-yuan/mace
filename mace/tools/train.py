@@ -164,11 +164,12 @@ def train(
     if distributed:
         torch.distributed.barrier()
 
+    model_to_evaluate = model if distributed_model is None else distributed_model
     # # log validation loss before _any_ training
     param_context = ema.average_parameters() if ema is not None else nullcontext()
     with param_context:
         valid_loss, eval_metrics = evaluate(
-            model=model,
+            model=model_to_evaluate,
             loss_fn=loss_fn,
             data_loader=valid_loader,
             output_args=output_args,
